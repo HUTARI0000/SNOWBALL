@@ -215,8 +215,8 @@ function detectImageType(buf) {
 //   linkStyle/linkLayout(링크 버튼 모양/배열),
 //   blocks(내용 블록: 글/토글/사진 갤러리/일정 캘린더), stickers(스티커)
 // ------------------------------------------------------------
-const FONT_LIMITS = { title: [14, 60, 26], sub: [10, 28, 14], body: [11, 28, 15], btn: [11, 28, 15] }; // [최소, 최대, 기본값]
-const BTN_LIMITS = { pad: [6, 32, 14], width: [40, 100, 100] }; // 링크 버튼 크기: pad=위아래 여백(px), width=너비(%)  [최소, 최대, 기본값]
+const FONT_LIMITS = { title: [14, 60, 26], sub: [10, 28, 14], body: [11, 28, 15], btn: [8, 28, 15] }; // [최소, 최대, 기본값]
+const BTN_LIMITS = { pad: [2, 32, 14], width: [20, 100, 100] }; // 링크 버튼 크기: pad=위아래 여백(px), width=너비(%)  [최소, 최대, 기본값]
 const ALIGNS = ['left', 'center', 'right'];
 const BLOCK_TYPES = ['text', 'toggle', 'gallery', 'calendar'];
 const MAX_BLOCKS = 12;
@@ -278,6 +278,7 @@ function normalizeDesign(page) {
     blocks = page.bio ? [{ type: 'text', text: page.bio, align: 'left' }] : [];
   }
   blocks = blocks.map(dropHeading);
+  const linksPos = Number.isInteger(d.linksPos) ? clamp(d.linksPos, 0, blocks.length) : 0; // 링크 버튼 묶음이 놓일 자리 (0 = 맨 위)
 
   const btnSaved = d.btn || {};
   const btn = {};
@@ -298,6 +299,7 @@ function normalizeDesign(page) {
     linkStyle: pick(d.linkStyle, ['fill', 'card', 'outline'], 'fill'),
     linkLayout: pick(d.linkLayout, ['stack', 'row'], 'stack'),
     blocks: blocks,
+    linksPos: linksPos,
     stickers: Array.isArray(d.stickers) ? d.stickers : []
   };
 }
@@ -373,10 +375,16 @@ function validateDesign(input, slug) {
 
   if (!Array.isArray(input.blocks) || input.blocks.length > MAX_BLOCKS) return { error: '블록은 최대 ' + MAX_BLOCKS + '개까지예요.' };
   const blocks = [];
-  for (const b of input.blocks) {
-    const r = validateBlock(b, slug);
+  // 링크 버튼 묶음의 자리: 빈 블록이 정리돼도 자리가 어긋나지 않게, "앞에 남은 블록 수"로 계산해요.
+  const rawPos = Number.isInteger(input.linksPos) ? clamp(input.linksPos, 0, input.blocks.length) : 0;
+  let linksPos = 0;
+  for (let k = 0; k < input.blocks.length; k++) {
+    const r = validateBlock(input.blocks[k], slug);
     if (r.error) return { error: r.error };
-    if (r.block) blocks.push(r.block);
+    if (r.block) {
+      blocks.push(r.block);
+      if (k < rawPos) linksPos++;
+    }
   }
 
   if (!Array.isArray(input.stickers) || input.stickers.length > 10) return { error: '스티커는 최대 10개까지예요.' };
@@ -402,6 +410,7 @@ function validateDesign(input, slug) {
       linkStyle: pick(input.linkStyle, ['fill', 'card', 'outline'], 'fill'),
       linkLayout: pick(input.linkLayout, ['stack', 'row'], 'stack'),
       blocks: blocks,
+      linksPos: linksPos,
       stickers: stickers
     }
   };
@@ -507,10 +516,11 @@ function renderPage(page) {
     html += '</header>';
   }
 
-  // ----- 링크 버튼 -----
+  // ----- 링크 버튼 (아래 블록들 사이의 정해진 자리에 놓여요) -----
+  let linksHtml = '';
   if (page.links.length) {
     const ls = oneOf(d.linkStyle, ['fill', 'card', 'outline'], 'fill');
-    html += '<nav class="links links-' + oneOf(d.linkLayout, ['stack', 'row'], 'stack') + '">';
+    linksHtml += '<nav class="links links-' + oneOf(d.linkLayout, ['stack', 'row'], 'stack') + (Number(d.btn.width) >= 100 ? ' links-grow' : '') + '">';
     page.links.forEach(function (l) {
       let style;
       if (ls === 'fill') {            // 색을 채운 버튼
@@ -523,15 +533,17 @@ function renderPage(page) {
         const c = l.color || d.accent;
         style = 'background:transparent;border:2px solid ' + c + ';color:' + c;
       }
-      html += '<a class="link-btn ls-' + ls + '" style="' + style + '" href="' + escapeHtml(l.url) +
+      linksHtml += '<a class="link-btn ls-' + ls + '" style="' + style + '" href="' + escapeHtml(l.url) +
         '" target="_blank" rel="noopener noreferrer">' + escapeHtml(l.title) + '</a>';
     });
-    html += '</nav>';
+    linksHtml += '</nav>';
   }
+  const linksPos = Math.min(d.blocks.length, Math.max(0, Number(d.linksPos) || 0));
 
   // ----- 블록들: 작은 소제목 + 둥근 카드 -----
   const cardClass = 'card cs-' + oneOf(d.cardStyle, ['gray', 'white', 'none'], 'gray');
   d.blocks.forEach(function (b, i) {
+    if (i === linksPos) html += linksHtml;
     html += '<section class="blk">';
     html += '<div class="' + cardClass + '">';
     if (b.type === 'text') {
@@ -552,6 +564,7 @@ function renderPage(page) {
     }
     html += '</div></section>';
   });
+  if (linksPos >= d.blocks.length) html += linksHtml;
 
   // ----- 스티커: 가로 위치는 %, 세로 위치는 px (맨 위에서부터) -----
   d.stickers.forEach(function (s, i) {
@@ -663,7 +676,8 @@ const PAGE_CSS = `
 .links-row { flex-direction: row; overflow-x: auto; padding: 4px 2px 10px; }
 .link-btn { display: block; box-sizing: border-box; text-decoration: none; text-align: center; padding: var(--btn-pad) 14px; font-weight: bold; font-size: var(--fs-btn); border-radius: 12px; }
 .links-stack .link-btn { width: var(--btn-w); margin: 0 auto; }
-.links-row .link-btn { flex: 1 0 auto; min-width: 110px; white-space: nowrap; }
+.links-row .link-btn { flex: 0 0 auto; min-width: max(48px, calc(var(--btn-w) * 1.1px)); white-space: nowrap; }
+.links-row.links-grow .link-btn { flex: 1 0 auto; }
 .ls-card { border-radius: 22px; box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
 .link-btn:hover { filter: brightness(0.94); }
 .blk { margin: 0 0 18px; }
@@ -865,7 +879,7 @@ function editPage(token, page) {
       </select>
       <label>버튼 크기</label>
       <div id="btnSizes"></div>
-      <p class="hint">너비는 "세로로 쌓기"일 때 적용돼요. 글자 크기는 위의 "글자 크기"에서 조절해요.</p>
+      <p class="hint">작게 만들려면 높이와 너비를 줄이고, 글자 크기는 위의 "글자 크기"에서 줄여요. "가로로 나란히"일 때는 너비가 버튼의 최소 너비로 쓰여요.</p>
       <p class="hint">버튼마다 다른 색을 쓰려면 각 버튼의 "이 버튼만 다른 색"을 켜세요.</p>
       <div id="links"></div>
       <button class="gray" id="addLink">+ 링크 추가</button>
@@ -873,7 +887,7 @@ function editPage(token, page) {
 
     <div class="box">
       <h2>내용 블록</h2>
-      <p class="hint">블록을 추가해서 페이지를 채워요. ↑↓로 순서를 바꿀 수 있어요. (최대 12개)<br>
+      <p class="hint">블록을 추가해서 페이지를 채워요. ↑↓나 "번째" 선택으로 순서를 마음대로 바꿀 수 있어요. 링크 버튼 묶음도 같이 움직여요. (최대 12개)<br>
       글 안에서 <b>**이렇게**</b> 쓰면 굵은 글씨가 돼요.</p>
       <div id="blocks"></div>
       <button class="gray" data-add="text">+ 글</button>
@@ -1178,11 +1192,52 @@ function drawGalleryThumbs(b, box) {
   });
 }
 
+// 링크 버튼 묶음과 블록들을 한 줄로 늘어놓은 목록 (순서를 바꿀 때 써요)
+function unifiedList() {
+  const arr = design.blocks.slice();
+  arr.splice(Math.min(design.linksPos, arr.length), 0, { type: '__links' });
+  return arr;
+}
+function moveItem(from, to) {
+  const arr = unifiedList();
+  if (to < 0 || to >= arr.length || to === from) { drawBlocks(); return; }
+  arr.splice(to, 0, arr.splice(from, 1)[0]);
+  design.linksPos = arr.findIndex(function (x) { return x.type === '__links'; });
+  design.blocks = arr.filter(function (x) { return x.type !== '__links'; });
+  window.__calState = {};   // 캘린더 번호가 바뀌므로 보던 달 기억을 초기화해요
+  drawBlocks(); changed();
+}
+function orderControls(u, total) {
+  const wrap = document.createElement('span');
+  const sel = document.createElement('select'); sel.style.width = 'auto'; sel.title = '순서';
+  for (let n = 0; n < total; n++) {
+    const o = document.createElement('option'); o.value = String(n); o.textContent = (n + 1) + '번째'; sel.appendChild(o);
+  }
+  sel.value = String(u);
+  sel.onchange = function () { moveItem(u, Number(sel.value)); };
+  wrap.append(button('↑', 'gray', function () { moveItem(u, u - 1); }),
+    button('↓', 'gray', function () { moveItem(u, u + 1); }), sel);
+  return wrap;
+}
+
 function drawBlocks() {
   const box = $('blocks'); box.innerHTML = '';
-  design.blocks.forEach(function (b, i) {
+  const list = unifiedList();
+  let bi = -1;   // 블록끼리만 센 번호 (캘린더 구분에 써요)
+  list.forEach(function (b, u) {
     const item = document.createElement('div'); item.className = 'item';
-    const tag = document.createElement('div'); tag.className = 'tag'; tag.textContent = BLOCK_NAMES[b.type];
+    const tag = document.createElement('div'); tag.className = 'tag';
+    if (b.type === '__links') {
+      tag.textContent = '링크 버튼 묶음';
+      const note = document.createElement('p'); note.className = 'hint';
+      note.textContent = '위쪽 "링크 버튼" 칸에서 만든 버튼들이 이 자리에 나와요.';
+      item.append(tag, note, orderControls(u, list.length));
+      box.appendChild(item);
+      return;
+    }
+    bi++;
+    const i = bi;
+    tag.textContent = BLOCK_NAMES[b.type];
     item.append(tag);
 
     if (b.type === 'text') {
@@ -1227,10 +1282,13 @@ function drawBlocks() {
       }));
     }
 
-    item.append(document.createElement('br'),
-      button('↑', 'gray', function () { move(design.blocks, i, -1, drawBlocks); }),
-      button('↓', 'gray', function () { move(design.blocks, i, 1, drawBlocks); }),
-      button('블록 삭제', 'red', function () { design.blocks.splice(i, 1); drawBlocks(); changed(); }));
+    item.append(document.createElement('br'), orderControls(u, list.length),
+      button('블록 삭제', 'red', function () {
+        design.blocks.splice(i, 1);
+        if (i < design.linksPos) design.linksPos--;   // 지운 블록이 링크 묶음보다 앞이었으면 자리를 하나 당겨요
+        window.__calState = {};
+        drawBlocks(); changed();
+      }));
     box.appendChild(item);
   });
 }
@@ -1244,7 +1302,10 @@ document.querySelectorAll('[data-add]').forEach(function (btn) {
     if (type === 'toggle') { b.title = ''; b.text = ''; b.align = 'left'; b.open = false; }
     if (type === 'gallery') { b.images = []; b.columns = 2; }
     if (type === 'calendar') { b.events = []; b.color = design.accent; }
-    design.blocks.push(b); drawBlocks(); changed();
+    const atEnd = design.linksPos > 0 && design.linksPos >= design.blocks.length;   // 링크 묶음이 맨 아래에 있었다면 계속 맨 아래에 둬요
+    design.blocks.push(b);
+    if (atEnd) design.linksPos = design.blocks.length;
+    drawBlocks(); changed();
   };
 });
 
