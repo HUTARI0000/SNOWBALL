@@ -294,7 +294,7 @@ function normalizeDesign(page) {
 
   return {
     avatar: d.avatar || '',
-    bg: { type: bg.type || 'color', color1: bg.color1 || '#f3f0ff', color2: bg.color2 || '#d6ccff', image: bg.image || '' },
+    bg: { type: bg.type || 'color', color1: bg.color1 || '#f3f0ff', color2: bg.color2 || '#d6ccff', image: bg.image || '', overlay: Number.isFinite(bg.overlay) ? clamp(bg.overlay, 0, 90) : (d.bg ? 0 : 30) },
     accent: d.accent || '#6c5ce7',
     cardStyle: pick(d.cardStyle, ['gray', 'white', 'none'], 'gray'),
     textColor: d.textColor === 'light' ? 'light' : 'dark',
@@ -311,15 +311,22 @@ function normalizeDesign(page) {
 }
 
 // 블록 하나를 검사하고 정리해요. 결과: { block } 또는 { error } 또는 { skip: true }(빈 블록)
+// 글/갤러리/캘린더 블록의 "접기" 정보: 제목을 적으면 제목을 눌러 접고 펼 수 있어요.
+function foldInfo(b) {
+  const title = typeof b.title === 'string' ? b.title.trim().slice(0, 50) : '';
+  return title ? { title: title, open: b.open !== false } : {};
+}
+
 function validateBlock(b, slug) {
   if (!b || !BLOCK_TYPES.includes(b.type)) return { error: '블록 종류가 올바르지 않아요.' };
   const isStr = function (v, max) { return typeof v === 'string' && v.length <= max; };
+  if (b.type !== 'toggle' && b.title !== undefined && !isStr(b.title, 50)) return { error: '섹션 제목은 50자 이하여야 해요.' };
 
   if (b.type === 'text') {
     if (!isStr(b.text, 1100)) return { error: '글 내용은 1000자 이하여야 해요.' };
     const text = b.text.trim();
     if (!text) return { skip: true };
-    return { block: { type: 'text', text: text, align: pick(b.align, ALIGNS, 'left') } };
+    return { block: Object.assign({ type: 'text', text: text, align: pick(b.align, ALIGNS, 'left') }, foldInfo(b)) };
   }
 
   if (b.type === 'toggle') {
@@ -335,7 +342,7 @@ function validateBlock(b, slug) {
       if (!isOurImageUrl(src, slug)) return { error: '갤러리 사진 주소가 올바르지 않아요.' };
     }
     if (b.images.length === 0) return { skip: true };
-    return { block: { type: 'gallery', images: b.images.slice(), columns: pick(Number(b.columns), [1, 2, 3], 2) } };
+    return { block: Object.assign({ type: 'gallery', images: b.images.slice(), columns: pick(Number(b.columns), [1, 2, 3], 2) }, foldInfo(b)) };
   }
 
   // calendar
@@ -348,7 +355,7 @@ function validateBlock(b, slug) {
     if (ev.color && !isHexColor(ev.color)) return { error: '일정 색 형식이 올바르지 않아요.' };
     if (ev.text.trim()) events.push({ date: ev.date, text: ev.text.trim(), color: ev.color || '' });
   }
-  return { block: { type: 'calendar', color: b.color || '', events: events } };
+  return { block: Object.assign({ type: 'calendar', color: b.color || '', events: events }, foldInfo(b)) };
 }
 
 // 사용자가 보낸 design을 꼼꼼히 검사하고 깨끗하게 정리해요. 문제가 있으면 { error } 를 돌려줘요.
@@ -399,7 +406,7 @@ function validateDesign(input, slug) {
   return {
     design: {
       avatar: input.avatar || '',
-      bg: { type: bg.type, color1: bg.color1, color2: bg.color2, image: bg.image || '' },
+      bg: { type: bg.type, color1: bg.color1, color2: bg.color2, image: bg.image || '', overlay: Number.isFinite(bg.overlay) ? Math.round(clamp(bg.overlay, 0, 90)) : 0 },
       accent: input.accent,
       cardStyle: pick(input.cardStyle, ['gray', 'white', 'none'], 'gray'),
       textColor: pick(input.textColor, ['dark', 'light'], 'dark'),
@@ -575,9 +582,12 @@ function readableText(hex) {
 // 배경 설정(design.bg)을 CSS 글자로 바꿔요.
 function bgCss(d) {
   const bg = d.bg;
-  if (bg.type === 'image' && bg.image) return "background:#333 url('" + bg.image + "') center / cover no-repeat;";
-  if (bg.type === 'gradient') return 'background:linear-gradient(160deg,' + bg.color1 + ',' + bg.color2 + ');';
-  return 'background:' + bg.color1 + ';';
+  const o = Math.min(90, Math.max(0, Number(bg.overlay) || 0)) / 100;
+  // 배경 위에 올리는 흰색 반투명 덮개 (0이면 없음)
+  const veil = o > 0 ? 'linear-gradient(rgba(255,255,255,' + o + '),rgba(255,255,255,' + o + ')),' : '';
+  if (bg.type === 'image' && bg.image) return "background:" + veil + "url('" + bg.image + "') center / cover no-repeat,#333;";
+  if (bg.type === 'gradient') return 'background:' + veil + 'linear-gradient(160deg,' + bg.color1 + ',' + bg.color2 + ');';
+  return 'background:' + veil + 'linear-gradient(' + bg.color1 + ',' + bg.color1 + ');';
 }
 
 // 페이지 내용(머리글, 링크 버튼, 블록들, 스티커)을 HTML로 만들어요.
@@ -638,6 +648,9 @@ function renderPage(page) {
     if (i === linksPos) html += linksHtml;
     html += '<section class="blk">';
     html += '<div class="' + cardClass + '">';
+    // 제목이 있는 글/갤러리/캘린더는 제목을 눌러 접고 펼 수 있어요. (토글 블록은 원래 그래요)
+    const fold = b.type !== 'toggle' && b.title;
+    if (fold) html += '<details class="toggle fold"' + (b.open !== false ? ' open' : '') + '><summary>' + escapeHtml(b.title) + '</summary><div class="fold-body">';
     if (b.type === 'text') {
       html += '<div class="sec-text al-' + al(b.align) + '">' + fmt(b.text) + '</div>';
     } else if (b.type === 'toggle') {
@@ -654,6 +667,7 @@ function renderPage(page) {
       // 달력 모양은 브라우저에서 renderCalendars() 가 그려줘요.
       html += '<div class="cal" data-id="b' + i + '" data-color="' + escapeHtml(b.color || d.accent) + '" data-events="' + escapeHtml(JSON.stringify(b.events || [])) + '"></div>';
     }
+    if (fold) html += '</div></details>';
     html += '</div></section>';
   });
   if (linksPos >= d.blocks.length) html += linksHtml;
@@ -692,7 +706,7 @@ function calendarHtml(events, y, m, today, sel, color) {
     const key = monthKey + '-' + pad(day);
     const list = byDate[key];
     h += '<div class="cal-day' + (list ? ' has' : '') + (key === today ? ' today' : '') + (key === sel ? ' sel' : '') +
-      '"' + (list ? ' data-date="' + key + '"' : '') + '>' + day;
+      '" data-date="' + key + '">' + day;
     if (list) {
       h += '<span class="cal-bars">';
       list.slice(0, 3).forEach(function (ev) { h += '<i style="background:' + (safe(ev.color) || base) + '"></i>'; });
@@ -785,6 +799,11 @@ const PAGE_CSS = `
 .al-left { text-align: left; } .al-center { text-align: center; } .al-right { text-align: right; }
 details.toggle summary { cursor: pointer; font-weight: bold; font-size: var(--fs-body); }
 details.toggle .sec-text { margin-top: 10px; }
+details.toggle summary { list-style: none; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+details.toggle summary::-webkit-details-marker { display: none; }
+details.toggle summary::after { content: '▾'; opacity: 0.55; transition: transform 0.15s; }
+details.toggle:not([open]) summary::after { transform: rotate(-90deg); }
+.fold-body { margin-top: 12px; }
 .gallery { display: grid; grid-template-columns: repeat(var(--cols), 1fr); gap: 6px; }
 .gallery img { width: 100%; aspect-ratio: 1 / 1; object-fit: cover; border-radius: 12px; display: block; }
 .cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; font-size: var(--fs-body); }
@@ -890,6 +909,13 @@ function editPage(token, page) {
   button.gray { background: #b2bec3; }
   button.red { background: #d63031; }
   .item { background: #f8f8f8; border-radius: 10px; padding: 10px; margin: 8px 0; }
+  .evline { display: flex; align-items: center; gap: 8px; padding: 6px 10px; margin: 4px 0; background: #fff; border: 1px solid #e5e5e5; border-radius: 8px; cursor: pointer; font-size: 14px; }
+  .evline:hover { border-color: #6c5ce7; }
+  .evline i { flex: none; width: 4px; height: 16px; border-radius: 2px; }
+  .evline span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .evedit { background: #fff; border: 2px solid #6c5ce7; border-radius: 10px; padding: 8px; margin: 4px 0; }
+  #preview .cal-day[data-date] { cursor: pointer; }
+  #preview .cal-day[data-date]:hover { background: rgba(0,0,0,0.05); }
   .item .tag { display: inline-block; background: #6c5ce7; color: white; font-size: 12px; padding: 2px 8px; border-radius: 20px; margin-bottom: 4px; }
   .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .row input[type=text] { flex: 1; min-width: 120px; width: auto; }
@@ -961,6 +987,9 @@ function editPage(token, page) {
         <label>배경 사진</label>
         <input type="file" id="bgFile" accept="image/png,image/jpeg,image/webp">
       </div>
+      <label>배경 위 흰색 덮개 <span id="veilVal" class="small"></span></label>
+      <input type="range" id="bgVeil" min="0" max="90" step="5">
+      <p class="hint">배경 위에 흰색 반투명 막을 씌워요. 0%면 없음, 높을수록 배경이 연해져서 글자가 잘 보여요.</p>
       <label>카드 모양 (글, 토글, 갤러리, 캘린더를 담는 둥근 상자)</label>
       <select id="cardStyle">
         <option value="gray">연한 회색 카드</option>
@@ -1056,6 +1085,9 @@ window.onbeforeunload = function () { return dirty ? '저장하지 않은 변경
 // 미리보기 안의 링크는 눌러도 이동하지 않게 하고, 캘린더의 ‹ › 버튼은 동작하게 해요.
 preview.addEventListener('click', function (e) {
   if (e.target.closest('a')) e.preventDefault();
+  // 달력 날짜를 누르면 그 날 일정을 편집, ‹ › 는 달 이동
+  const day = e.target.closest('.cal-day[data-date]');
+  if (day) { editFromPreview(day); return; }
   handleCalendarClick(e);
 });
 
@@ -1175,6 +1207,8 @@ function syncBgControls() {
   $('cardStyle').value = design.cardStyle;
   $('textColor').value = design.textColor;
   $('accent').value = design.accent;
+  $('bgVeil').value = design.bg.overlay || 0;
+  $('veilVal').textContent = (design.bg.overlay || 0) + '%';
 }
 
 PRESETS.forEach(function (p) {
@@ -1199,6 +1233,7 @@ $('bgFile').onchange = async function (e) {
   const url = await uploadImage(file, 1200, 'image/jpeg');
   if (url) { design.bg.image = url; design.bg.type = 'image'; syncBgControls(); changed(); }
 };
+$('bgVeil').oninput = function () { design.bg.overlay = Number($('bgVeil').value); $('veilVal').textContent = $('bgVeil').value + '%'; changed(); };
 $('cardStyle').onchange = function () { design.cardStyle = $('cardStyle').value; changed(); };
 $('textColor').onchange = function () { design.textColor = $('textColor').value; changed(); };
 $('accent').oninput = function () { design.accent = $('accent').value; drawLinks(); changed(); };
@@ -1280,10 +1315,37 @@ function jumpToMonth(index, dateString) {
   window.__calState['b' + index] = { y: Number(dateString.slice(0, 4)), m: Number(dateString.slice(5, 7)) - 1, sel: dateString };
 }
 
+// 캘린더 일정 편집: 지금 고치는 일정만 펼쳐서 보여주고, 나머지는 한 줄로 간단히 보여줘요.
+// calEdit[블록번호] = 지금 고치는 일정 (일정 객체 자체를 기억해서, 줄 번호가 바뀌어도 안전해요)
+let calEdit = {};
+function shortDate(d) { return /^\\d{4}-\\d{2}-\\d{2}$/.test(d) ? Number(d.slice(5, 7)) + '/' + Number(d.slice(8)) : '날짜 없음'; }
+// 고치는 일정 말고, 내용이 빈 일정은 지워요 (실수로 눌러서 생긴 빈 줄 정리)
+function pruneEmptyEvents(b, keep) {
+  b.events = b.events.filter(function (ev) { return ev === keep || ev.text.trim(); });
+}
+
 function drawEvents(b, index, box) {
   box.innerHTML = '';
+  const editing = calEdit[index];
   b.events.forEach(function (ev, k) {
-    const row = document.createElement('div'); row.className = 'row';
+    if (ev !== editing) {
+      // 한 줄 요약 (눌러서 수정)
+      const line = document.createElement('div'); line.className = 'evline';
+      const dot = document.createElement('i'); dot.style.background = ev.color || b.color || design.accent;
+      const label = document.createElement('span');
+      label.textContent = shortDate(ev.date) + '  ' + (ev.text || '(내용 없음)');
+      line.append(dot, label);
+      line.title = '눌러서 수정';
+      line.onclick = function () {
+        pruneEmptyEvents(b, ev);
+        calEdit[index] = ev; jumpToMonth(index, ev.date);
+        drawEvents(b, index, box); refresh();
+      };
+      box.appendChild(line);
+      return;
+    }
+    // 지금 고치는 일정: 전체 입력칸
+    const row = document.createElement('div'); row.className = 'row evedit';
     const date = document.createElement('input'); date.type = 'date'; date.value = ev.date;
     date.oninput = function () { ev.date = date.value; jumpToMonth(index, ev.date); changed(); };
     const text = textInput(ev.text, '일정 내용', 100, function (v) { ev.text = v; changed(); });
@@ -1297,9 +1359,36 @@ function drawEvents(b, index, box) {
     };
     col.oninput = function () { ev.color = col.value; changed(); };
     const colorLabel = document.createElement('label'); colorLabel.append(use, ' 다른 색 ', col);
-    row.append(date, text, colorLabel, button('삭제', 'red', function () { b.events.splice(k, 1); drawEvents(b, index, box); changed(); }));
+    row.append(date, text, colorLabel,
+      button('완료', 'gray', function () { pruneEmptyEvents(b, null); calEdit[index] = null; drawEvents(b, index, box); changed(); }),
+      button('삭제', 'red', function () { b.events.splice(k, 1); calEdit[index] = null; drawEvents(b, index, box); changed(); }));
     box.appendChild(row);
+    setTimeout(function () { text.focus(); }, 0);
   });
+}
+
+// 미리보기 달력에서 날짜를 누르면: 그 날 일정을 바로 고칠 수 있게 해줘요. (일정이 없는 날이면 새 일정이 생겨요)
+function editFromPreview(dayEl) {
+  const calEl = dayEl.closest('.cal'); if (!calEl) return;
+  const index = Number(calEl.dataset.id.slice(1));
+  const b = design.blocks[index]; if (!b || b.type !== 'calendar') return;
+  const date = dayEl.dataset.date;
+  let target = b.events.filter(function (ev) { return ev.date === date; })[0];
+  if (!target) {
+    if (b.events.length >= 50) { setMsg('일정은 캘린더 하나에 50개까지예요.'); return; }
+    target = { date: date, text: '', color: '' };
+    pruneEmptyEvents(b, target);
+    b.events.push(target);
+  } else {
+    pruneEmptyEvents(b, target);
+  }
+  calEdit[index] = target;
+  window.__calState = window.__calState || {};
+  const st = window.__calState['b' + index] || (window.__calState['b' + index] = {});
+  st.y = Number(date.slice(0, 4)); st.m = Number(date.slice(5, 7)) - 1; st.sel = date;
+  drawBlocks(); changed();
+  const item = $('blk_' + index);
+  if (item) item.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
 
 function drawGalleryThumbs(b, box) {
@@ -1318,6 +1407,7 @@ function moveItem(from, to) {
   if (to < 0 || to >= arr.length || to === from) { drawBlocks(); return; }
   arr.splice(to, 0, arr.splice(from, 1)[0]);
   window.__calState = {};   // 캘린더 번호가 바뀌므로 보던 달 기억을 초기화해요
+  calEdit = {};
   drawBlocks(); changed();
 }
 function orderControls(u, total) {
@@ -1342,6 +1432,15 @@ function drawBlocks() {
     const tag = document.createElement('div'); tag.className = 'tag';
     tag.textContent = BLOCK_NAMES[b.type];
     item.append(tag);
+    item.id = 'blk_' + i;
+
+    // 글/갤러리/캘린더: 제목을 적으면 눌러서 접고 펼 수 있어요.
+    if (b.type !== 'toggle') {
+      const foldOpen = document.createElement('input'); foldOpen.type = 'checkbox'; foldOpen.checked = b.open !== false;
+      foldOpen.onchange = function () { b.open = foldOpen.checked; changed(); };
+      const foldLabel = labelOf('', foldOpen); foldLabel.append(' 처음부터 펼쳐 두기');
+      item.append(textInput(b.title || '', '섹션 제목 (선택) — 적으면 눌러서 접고 펼 수 있어요', 50, function (v) { b.title = v; changed(); }), foldLabel);
+    }
 
     if (b.type === 'text') {
       item.append(textArea(b.text, '내용을 적어 주세요', 1000, function (v) { b.text = v; changed(); }),
@@ -1377,9 +1476,13 @@ function drawBlocks() {
       drawEvents(b, i, events);
       const barColor = document.createElement('input'); barColor.type = 'color'; barColor.value = b.color || design.accent;
       barColor.oninput = function () { b.color = barColor.value; drawEvents(b, i, events); changed(); };
-      item.append(labelOf('일정 막대 기본 색 ', barColor), events, button('+ 일정 추가', 'gray', function () {
+      item.append(labelOf('일정 막대 기본 색 ', barColor), events);
+      const hintP = document.createElement('p'); hintP.className = 'hint'; hintP.textContent = '미리보기 달력에서 날짜를 눌러도 그 날 일정을 바로 고칠 수 있어요.';
+      item.append(hintP, button('+ 일정 추가', 'gray', function () {
         if (b.events.length >= 50) { setMsg('일정은 캘린더 하나에 50개까지예요.'); return; }
-        b.events.push({ date: todayString(), text: '', color: '' });
+        const ev = { date: todayString(), text: '', color: '' };
+        pruneEmptyEvents(b, ev);
+        b.events.push(ev); calEdit[i] = ev;
         jumpToMonth(i, todayString());
         drawEvents(b, i, events); changed();
       }));
@@ -1388,7 +1491,7 @@ function drawBlocks() {
     item.append(document.createElement('br'), orderControls(u, list.length),
       button('블록 삭제', 'red', function () {
         design.blocks.splice(i, 1);
-        window.__calState = {};
+        window.__calState = {}; calEdit = {};
         drawBlocks(); changed();
       }));
     box.appendChild(item);
@@ -1401,6 +1504,7 @@ document.querySelectorAll('[data-add]').forEach(function (btn) {
     const type = btn.dataset.add;
     const b = { type: type };
     if (type === 'text') { b.text = ''; b.align = 'left'; }
+    if (type !== 'toggle') { b.title = ''; b.open = true; }
     if (type === 'toggle') { b.title = ''; b.text = ''; b.align = 'left'; b.open = false; }
     if (type === 'gallery') { b.images = []; b.columns = 2; }
     if (type === 'calendar') { b.events = []; b.color = design.accent; }
