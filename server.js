@@ -278,7 +278,9 @@ function normalizeDesign(page) {
     blocks = page.bio ? [{ type: 'text', text: page.bio, align: 'left' }] : [];
   }
   blocks = blocks.map(dropHeading);
-  const linksPos = Number.isInteger(d.linksPos) ? clamp(d.linksPos, 0, blocks.length) : 0; // 링크 버튼 묶음이 놓일 자리 (0 = 맨 위)
+  // 링크 버튼 위치: 맨 위('top') 또는 맨 아래('bottom'). (예전에 숫자 자리로 저장된 페이지는, 맨 아래였을 때만 'bottom'으로 봐요)
+  const linksAt = d.linksAt === 'bottom' || d.linksAt === 'top' ? d.linksAt
+    : (Number.isInteger(d.linksPos) && d.linksPos > 0 && d.linksPos >= blocks.length ? 'bottom' : 'top');
 
   const btnSaved = d.btn || {};
   const btn = {};
@@ -299,7 +301,7 @@ function normalizeDesign(page) {
     linkStyle: pick(d.linkStyle, ['fill', 'card', 'outline'], 'fill'),
     linkLayout: pick(d.linkLayout, ['stack', 'row'], 'stack'),
     blocks: blocks,
-    linksPos: linksPos,
+    linksAt: linksAt,
     stickers: Array.isArray(d.stickers) ? d.stickers : []
   };
 }
@@ -375,16 +377,10 @@ function validateDesign(input, slug) {
 
   if (!Array.isArray(input.blocks) || input.blocks.length > MAX_BLOCKS) return { error: '블록은 최대 ' + MAX_BLOCKS + '개까지예요.' };
   const blocks = [];
-  // 링크 버튼 묶음의 자리: 빈 블록이 정리돼도 자리가 어긋나지 않게, "앞에 남은 블록 수"로 계산해요.
-  const rawPos = Number.isInteger(input.linksPos) ? clamp(input.linksPos, 0, input.blocks.length) : 0;
-  let linksPos = 0;
-  for (let k = 0; k < input.blocks.length; k++) {
-    const r = validateBlock(input.blocks[k], slug);
+  for (const b of input.blocks) {
+    const r = validateBlock(b, slug);
     if (r.error) return { error: r.error };
-    if (r.block) {
-      blocks.push(r.block);
-      if (k < rawPos) linksPos++;
-    }
+    if (r.block) blocks.push(r.block);
   }
 
   if (!Array.isArray(input.stickers) || input.stickers.length > 10) return { error: '스티커는 최대 10개까지예요.' };
@@ -410,7 +406,7 @@ function validateDesign(input, slug) {
       linkStyle: pick(input.linkStyle, ['fill', 'card', 'outline'], 'fill'),
       linkLayout: pick(input.linkLayout, ['stack', 'row'], 'stack'),
       blocks: blocks,
-      linksPos: linksPos,
+      linksAt: pick(input.linksAt, ['top', 'bottom'], 'top'),
       stickers: stickers
     }
   };
@@ -538,7 +534,7 @@ function renderPage(page) {
     });
     linksHtml += '</nav>';
   }
-  const linksPos = Math.min(d.blocks.length, Math.max(0, Number(d.linksPos) || 0));
+  const linksPos = d.linksAt === 'bottom' ? d.blocks.length : 0;   // 맨 위면 첫 블록 앞, 맨 아래면 마지막 블록 뒤
 
   // ----- 블록들: 작은 소제목 + 둥근 카드 -----
   const cardClass = 'card cs-' + oneOf(d.cardStyle, ['gray', 'white', 'none'], 'gray');
@@ -674,6 +670,9 @@ const PAGE_CSS = `
 .links { display: flex; gap: 10px; margin: 0 0 18px; }
 .links-stack { flex-direction: column; }
 .links-row { flex-direction: row; overflow-x: auto; padding: 4px 2px 10px; }
+/* 가운데 정렬: 자리가 남으면 가운데로 모이고, 넘치면 처음부터 옆으로 스크롤할 수 있어요 */
+.links-row .link-btn:first-child { margin-left: auto; }
+.links-row .link-btn:last-child { margin-right: auto; }
 .link-btn { display: block; box-sizing: border-box; text-decoration: none; text-align: center; padding: var(--btn-pad) 14px; font-weight: bold; font-size: var(--fs-btn); border-radius: 12px; }
 .links-stack .link-btn { width: var(--btn-w); margin: 0 auto; }
 /* 가로 배열: 너비 슬라이더 = 버튼 한 개가 차지하는 줄 너비의 % (100%는 줄을 가득 채워 나눠 가져요) */
@@ -873,6 +872,11 @@ function editPage(token, page) {
         <option value="card">흰 카드 버튼 (그림자)</option>
         <option value="outline">테두리만 있는 버튼</option>
       </select>
+      <label>버튼 위치 (버튼은 항상 가운데에 놓여요)</label>
+      <select id="linksAt">
+        <option value="top">맨 위 (프로필 바로 아래)</option>
+        <option value="bottom">맨 아래 (모든 블록 뒤)</option>
+      </select>
       <label>버튼 배열</label>
       <select id="linkLayout">
         <option value="stack">세로로 쌓기</option>
@@ -888,7 +892,7 @@ function editPage(token, page) {
 
     <div class="box">
       <h2>내용 블록</h2>
-      <p class="hint">블록을 추가해서 페이지를 채워요. ↑↓나 "번째" 선택으로 순서를 마음대로 바꿀 수 있어요. 링크 버튼 묶음도 같이 움직여요. (최대 12개)<br>
+      <p class="hint">블록을 추가해서 페이지를 채워요. ↑↓나 "번째" 선택으로 순서를 마음대로 바꿀 수 있어요. (최대 12개)<br>
       글 안에서 <b>**이렇게**</b> 쓰면 굵은 글씨가 돼요.</p>
       <div id="blocks"></div>
       <button class="gray" data-add="text">+ 글</button>
@@ -1115,6 +1119,8 @@ $('accent').oninput = function () { design.accent = $('accent').value; drawLinks
 // ----- 링크 -----
 $('linkStyle').value = design.linkStyle;
 $('linkLayout').value = design.linkLayout;
+$('linksAt').value = design.linksAt;
+$('linksAt').onchange = function () { design.linksAt = $('linksAt').value; changed(); };
 $('linkStyle').onchange = function () { design.linkStyle = $('linkStyle').value; changed(); };
 $('linkLayout').onchange = function () { design.linkLayout = $('linkLayout').value; changed(); };
 
@@ -1193,18 +1199,11 @@ function drawGalleryThumbs(b, box) {
   });
 }
 
-// 링크 버튼 묶음과 블록들을 한 줄로 늘어놓은 목록 (순서를 바꿀 때 써요)
-function unifiedList() {
-  const arr = design.blocks.slice();
-  arr.splice(Math.min(design.linksPos, arr.length), 0, { type: '__links' });
-  return arr;
-}
+// 블록 순서 바꾸기 (↑ ↓ 와 "N번째" 선택)
 function moveItem(from, to) {
-  const arr = unifiedList();
+  const arr = design.blocks;
   if (to < 0 || to >= arr.length || to === from) { drawBlocks(); return; }
   arr.splice(to, 0, arr.splice(from, 1)[0]);
-  design.linksPos = arr.findIndex(function (x) { return x.type === '__links'; });
-  design.blocks = arr.filter(function (x) { return x.type !== '__links'; });
   window.__calState = {};   // 캘린더 번호가 바뀌므로 보던 달 기억을 초기화해요
   drawBlocks(); changed();
 }
@@ -1223,21 +1222,11 @@ function orderControls(u, total) {
 
 function drawBlocks() {
   const box = $('blocks'); box.innerHTML = '';
-  const list = unifiedList();
-  let bi = -1;   // 블록끼리만 센 번호 (캘린더 구분에 써요)
+  const list = design.blocks;
   list.forEach(function (b, u) {
+    const i = u;
     const item = document.createElement('div'); item.className = 'item';
     const tag = document.createElement('div'); tag.className = 'tag';
-    if (b.type === '__links') {
-      tag.textContent = '링크 버튼 묶음';
-      const note = document.createElement('p'); note.className = 'hint';
-      note.textContent = '위쪽 "링크 버튼" 칸에서 만든 버튼들이 이 자리에 나와요.';
-      item.append(tag, note, orderControls(u, list.length));
-      box.appendChild(item);
-      return;
-    }
-    bi++;
-    const i = bi;
     tag.textContent = BLOCK_NAMES[b.type];
     item.append(tag);
 
@@ -1286,7 +1275,6 @@ function drawBlocks() {
     item.append(document.createElement('br'), orderControls(u, list.length),
       button('블록 삭제', 'red', function () {
         design.blocks.splice(i, 1);
-        if (i < design.linksPos) design.linksPos--;   // 지운 블록이 링크 묶음보다 앞이었으면 자리를 하나 당겨요
         window.__calState = {};
         drawBlocks(); changed();
       }));
@@ -1303,9 +1291,7 @@ document.querySelectorAll('[data-add]').forEach(function (btn) {
     if (type === 'toggle') { b.title = ''; b.text = ''; b.align = 'left'; b.open = false; }
     if (type === 'gallery') { b.images = []; b.columns = 2; }
     if (type === 'calendar') { b.events = []; b.color = design.accent; }
-    const atEnd = design.linksPos > 0 && design.linksPos >= design.blocks.length;   // 링크 묶음이 맨 아래에 있었다면 계속 맨 아래에 둬요
     design.blocks.push(b);
-    if (atEnd) design.linksPos = design.blocks.length;
     drawBlocks(); changed();
   };
 });
