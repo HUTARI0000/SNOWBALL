@@ -216,6 +216,7 @@ function detectImageType(buf) {
 //   blocks(내용 블록: 글/토글/사진 갤러리/일정 캘린더), stickers(스티커)
 // ------------------------------------------------------------
 const FONT_LIMITS = { title: [14, 60, 26], sub: [10, 28, 14], body: [11, 28, 15], btn: [11, 28, 15] }; // [최소, 최대, 기본값]
+const BTN_LIMITS = { pad: [6, 32, 14], width: [40, 100, 100] }; // 링크 버튼 크기: pad=위아래 여백(px), width=너비(%)  [최소, 최대, 기본값]
 const ALIGNS = ['left', 'center', 'right'];
 const BLOCK_TYPES = ['text', 'toggle', 'gallery', 'calendar'];
 const MAX_BLOCKS = 12;
@@ -248,6 +249,16 @@ function pick(value, allowed, fallback) {
   return allowed.includes(value) ? value : fallback;
 }
 
+// 소제목 기능은 없어졌어요. 예전에 쓴 소제목이 있으면 글 맨 위의 굵은 줄로 바꿔서 내용이 사라지지 않게 해요.
+function dropHeading(b) {
+  const copy = Object.assign({}, b);
+  if (copy.type === 'text' && copy.heading) {
+    copy.text = '**' + copy.heading + '**' + (copy.text ? '\n' + copy.text : '');
+  }
+  delete copy.heading;
+  return copy;
+}
+
 // 저장돼 있는 design에 빠진 값이 있으면 기본값으로 채워요. (예전에 만든 페이지도 그대로 열려요)
 function normalizeDesign(page) {
   const d = page.design || {};
@@ -264,7 +275,14 @@ function normalizeDesign(page) {
   } else if (Array.isArray(d.sections)) { // 예전 "설명 섹션"은 글 블록으로 바꿔요
     blocks = d.sections.map(function (s) { return { type: 'text', heading: s.heading || '', text: s.text || '', align: 'left' }; });
   } else {
-    blocks = page.bio ? [{ type: 'text', heading: '', text: page.bio, align: 'left' }] : [];
+    blocks = page.bio ? [{ type: 'text', text: page.bio, align: 'left' }] : [];
+  }
+  blocks = blocks.map(dropHeading);
+
+  const btnSaved = d.btn || {};
+  const btn = {};
+  for (const key in BTN_LIMITS) {
+    btn[key] = Number.isFinite(btnSaved[key]) ? btnSaved[key] : BTN_LIMITS[key][2];
   }
 
   return {
@@ -276,6 +294,7 @@ function normalizeDesign(page) {
     header: { layout: pick(header.layout, ['stack', 'row'], 'stack'), align: pick(header.align, ALIGNS, 'center') },
     subtitle: typeof d.subtitle === 'string' ? d.subtitle : '',
     fonts: fonts,
+    btn: btn,
     linkStyle: pick(d.linkStyle, ['fill', 'card', 'outline'], 'fill'),
     linkLayout: pick(d.linkLayout, ['stack', 'row'], 'stack'),
     blocks: blocks,
@@ -287,21 +306,19 @@ function normalizeDesign(page) {
 function validateBlock(b, slug) {
   if (!b || !BLOCK_TYPES.includes(b.type)) return { error: '블록 종류가 올바르지 않아요.' };
   const isStr = function (v, max) { return typeof v === 'string' && v.length <= max; };
-  if (!isStr(b.heading, 30)) return { error: '소제목은 30자 이하여야 해요.' };
-  const heading = b.heading.trim();
 
   if (b.type === 'text') {
-    if (!isStr(b.text, 1000)) return { error: '글 내용은 1000자 이하여야 해요.' };
+    if (!isStr(b.text, 1100)) return { error: '글 내용은 1000자 이하여야 해요.' };
     const text = b.text.trim();
-    if (!heading && !text) return { skip: true };
-    return { block: { type: 'text', heading: heading, text: text, align: pick(b.align, ALIGNS, 'left') } };
+    if (!text) return { skip: true };
+    return { block: { type: 'text', text: text, align: pick(b.align, ALIGNS, 'left') } };
   }
 
   if (b.type === 'toggle') {
-    if (!isStr(b.title, 50) || !isStr(b.text, 1000)) return { error: '토글 제목은 50자, 내용은 1000자 이하여야 해요.' };
+    if (!isStr(b.title, 50) || !isStr(b.text, 1100)) return { error: '토글 제목은 50자, 내용은 1000자 이하여야 해요.' };
     const text = b.text.trim();
-    if (!heading && !b.title.trim() && !text) return { skip: true };
-    return { block: { type: 'toggle', heading: heading, title: b.title.trim() || '더 보기', text: text, align: pick(b.align, ALIGNS, 'left'), open: b.open === true } };
+    if (!b.title.trim() && !text) return { skip: true };
+    return { block: { type: 'toggle', title: b.title.trim() || '더 보기', text: text, align: pick(b.align, ALIGNS, 'left'), open: b.open === true } };
   }
 
   if (b.type === 'gallery') {
@@ -309,19 +326,21 @@ function validateBlock(b, slug) {
     for (const src of b.images) {
       if (!isOurImageUrl(src, slug)) return { error: '갤러리 사진 주소가 올바르지 않아요.' };
     }
-    if (!heading && b.images.length === 0) return { skip: true };
-    return { block: { type: 'gallery', heading: heading, images: b.images.slice(), columns: pick(Number(b.columns), [1, 2, 3], 2) } };
+    if (b.images.length === 0) return { skip: true };
+    return { block: { type: 'gallery', images: b.images.slice(), columns: pick(Number(b.columns), [1, 2, 3], 2) } };
   }
 
   // calendar
   if (!Array.isArray(b.events) || b.events.length > 50) return { error: '일정은 캘린더 하나에 50개까지 넣을 수 있어요.' };
+  if (b.color && !isHexColor(b.color)) return { error: '캘린더 막대 색 형식이 올바르지 않아요.' };
   const events = [];
   for (const ev of b.events) {
     if (!ev || !isValidDate(ev.date)) return { error: '일정의 날짜가 올바르지 않아요. 날짜를 골라 주세요.' };
     if (typeof ev.text !== 'string' || ev.text.length > 100) return { error: '일정 내용은 100자 이하여야 해요.' };
-    if (ev.text.trim()) events.push({ date: ev.date, text: ev.text.trim() });
+    if (ev.color && !isHexColor(ev.color)) return { error: '일정 색 형식이 올바르지 않아요.' };
+    if (ev.text.trim()) events.push({ date: ev.date, text: ev.text.trim(), color: ev.color || '' });
   }
-  return { block: { type: 'calendar', heading: heading, events: events } };
+  return { block: { type: 'calendar', color: b.color || '', events: events } };
 }
 
 // 사용자가 보낸 design을 꼼꼼히 검사하고 깨끗하게 정리해요. 문제가 있으면 { error } 를 돌려줘요.
@@ -342,6 +361,14 @@ function validateDesign(input, slug) {
     const v = input.fonts && input.fonts[key];
     if (!Number.isFinite(v)) return { error: '글자 크기 값이 올바르지 않아요.' };
     fonts[key] = Math.round(clamp(v, FONT_LIMITS[key][0], FONT_LIMITS[key][1]));
+  }
+
+  const btn = {};
+  for (const key in BTN_LIMITS) {
+    const v = input.btn ? input.btn[key] : undefined;   // 버튼 크기 정보가 아예 없으면 기본값을 써요
+    if (v === undefined) { btn[key] = BTN_LIMITS[key][2]; continue; }
+    if (!Number.isFinite(v)) return { error: '버튼 크기 값이 올바르지 않아요.' };
+    btn[key] = Math.round(clamp(v, BTN_LIMITS[key][0], BTN_LIMITS[key][1]));
   }
 
   if (!Array.isArray(input.blocks) || input.blocks.length > MAX_BLOCKS) return { error: '블록은 최대 ' + MAX_BLOCKS + '개까지예요.' };
@@ -371,6 +398,7 @@ function validateDesign(input, slug) {
       header: { layout: pick(header.layout, ['stack', 'row'], 'stack'), align: pick(header.align, ALIGNS, 'center') },
       subtitle: input.subtitle.trim(),
       fonts: fonts,
+      btn: btn,
       linkStyle: pick(input.linkStyle, ['fill', 'card', 'outline'], 'fill'),
       linkLayout: pick(input.linkLayout, ['stack', 'row'], 'stack'),
       blocks: blocks,
@@ -463,7 +491,8 @@ function renderPage(page) {
 
   let html = '<div class="stage" style="color:' + stageColor +
     ';--fs-title:' + Number(f.title) + 'px;--fs-sub:' + Number(f.sub) + 'px;--fs-body:' + Number(f.body) +
-    'px;--fs-btn:' + Number(f.btn) + 'px;--accent:' + d.accent + ';--accent-text:' + readableText(d.accent) + '">';
+    'px;--fs-btn:' + Number(f.btn) + 'px;--btn-pad:' + Number(d.btn.pad) + 'px;--btn-w:' + Number(d.btn.width) +
+    '%;--accent:' + d.accent + ';--accent-text:' + readableText(d.accent) + '">';
 
   // ----- 머리글: 프로필 사진, 제목, 짧은 설명 (모두 없어도 돼요) -----
   if (d.avatar || page.title || d.subtitle) {
@@ -504,7 +533,6 @@ function renderPage(page) {
   const cardClass = 'card cs-' + oneOf(d.cardStyle, ['gray', 'white', 'none'], 'gray');
   d.blocks.forEach(function (b, i) {
     html += '<section class="blk">';
-    if (b.heading) html += '<div class="blk-label">' + escapeHtml(b.heading) + '</div>';
     html += '<div class="' + cardClass + '">';
     if (b.type === 'text') {
       html += '<div class="sec-text al-' + al(b.align) + '">' + fmt(b.text) + '</div>';
@@ -520,7 +548,7 @@ function renderPage(page) {
       html += '</div>';
     } else if (b.type === 'calendar') {
       // 달력 모양은 브라우저에서 renderCalendars() 가 그려줘요.
-      html += '<div class="cal" data-id="b' + i + '" data-events="' + escapeHtml(JSON.stringify(b.events || [])) + '"></div>';
+      html += '<div class="cal" data-id="b' + i + '" data-color="' + escapeHtml(b.color || d.accent) + '" data-events="' + escapeHtml(JSON.stringify(b.events || [])) + '"></div>';
     }
     html += '</div></section>';
   });
@@ -538,14 +566,17 @@ function renderPage(page) {
 // 일정 캘린더 (브라우저에서 실행돼요)
 // ------------------------------------------------------------
 
-// 한 달짜리 달력 + 그 달의 일정 목록을 HTML로 만들어요. (m: 0~11)
-function calendarHtml(events, y, m, today) {
+// 한 달짜리 달력을 HTML로 만들어요. (m: 0~11, sel: 눌러서 선택한 날짜, color: 막대 기본 색)
+// 일정이 있는 날은 숫자 아래에 얇은 색 막대가 생기고, 그 날짜를 눌러야만 아래에 일정 이름이 나타나요.
+function calendarHtml(events, y, m, today, sel, color) {
   const pad = function (n) { return (n < 10 ? '0' : '') + n; };
+  const safe = function (c) { return /^#[0-9a-fA-F]{6}$/.test(c) ? c : ''; }; // 올바른 색 형식만 통과
+  const base = safe(color) || '#6c5ce7';
   const monthKey = y + '-' + pad(m + 1);
   const firstDay = new Date(y, m, 1).getDay();      // 1일이 무슨 요일인지 (0=일요일)
   const lastDate = new Date(y, m + 1, 0).getDate(); // 그 달이 며칠까지 있는지
-  const hasEvent = {};
-  events.forEach(function (ev) { hasEvent[ev.date] = true; });
+  const byDate = {};                                // 날짜별로 일정 모으기
+  events.forEach(function (ev) { (byDate[ev.date] = byDate[ev.date] || []).push(ev); });
 
   let h = '<div class="cal-head"><button type="button" class="cal-nav" data-dir="-1">‹</button><b>' +
     y + '년 ' + (m + 1) + '월</b><button type="button" class="cal-nav" data-dir="1">›</button></div>';
@@ -554,23 +585,33 @@ function calendarHtml(events, y, m, today) {
   for (let i = 0; i < firstDay; i++) h += '<div></div>';
   for (let day = 1; day <= lastDate; day++) {
     const key = monthKey + '-' + pad(day);
-    h += '<div class="cal-day' + (hasEvent[key] ? ' has' : '') + (key === today ? ' today' : '') + '">' + day + '</div>';
+    const list = byDate[key];
+    h += '<div class="cal-day' + (list ? ' has' : '') + (key === today ? ' today' : '') + (key === sel ? ' sel' : '') +
+      '"' + (list ? ' data-date="' + key + '"' : '') + '>' + day;
+    if (list) {
+      h += '<span class="cal-bars">';
+      list.slice(0, 3).forEach(function (ev) { h += '<i style="background:' + (safe(ev.color) || base) + '"></i>'; });
+      h += '</span>';
+    }
+    h += '</div>';
   }
   h += '</div>';
 
-  const list = events.filter(function (ev) { return ev.date.slice(0, 7) === monthKey; })
-    .sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
-  if (list.length) {
-    h += '<ul class="cal-list">' + list.map(function (ev) {
-      return '<li><b>' + Number(ev.date.slice(8)) + '일</b>' + escapeHtml(ev.text) + '</li>';
-    }).join('') + '</ul>';
-  } else {
-    h += '<p class="cal-empty">이 달에는 일정이 없어요.</p>';
+  if (sel && byDate[sel] && sel.slice(0, 7) === monthKey) {
+    // 선택한 날짜의 일정만 보여줘요.
+    const dayNum = Number(sel.slice(8));
+    const dow = ['일', '월', '화', '수', '목', '금', '토'][new Date(y, m, dayNum).getDay()];
+    h += '<div class="cal-detail"><div class="cal-detail-date">' + (m + 1) + '월 ' + dayNum + '일 (' + dow + ')</div><ul>' +
+      byDate[sel].map(function (ev) {
+        return '<li><i style="background:' + (safe(ev.color) || base) + '"></i><span>' + escapeHtml(ev.text) + '</span></li>';
+      }).join('') + '</ul></div>';
+  } else if (events.some(function (ev) { return ev.date.slice(0, 7) === monthKey; })) {
+    h += '<p class="cal-hint">일정이 있는 날짜를 눌러 보세요</p>';
   }
   return h;
 }
 
-// root 안의 모든 캘린더를 그려요. (보고 있는 달은 기억해 둬서, 다시 그려도 그대로 유지돼요)
+// root 안의 모든 캘린더를 그려요. (보고 있는 달과 선택한 날짜는 기억해 둬서, 다시 그려도 그대로 유지돼요)
 function renderCalendars(root) {
   const pad = function (n) { return (n < 10 ? '0' : '') + n; };
   window.__calState = window.__calState || {};
@@ -578,22 +619,29 @@ function renderCalendars(root) {
   const today = now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate());
   root.querySelectorAll('.cal').forEach(function (el) {
     const id = el.dataset.id;
-    const st = window.__calState[id] || (window.__calState[id] = { y: now.getFullYear(), m: now.getMonth() });
+    const st = window.__calState[id] || (window.__calState[id] = { y: now.getFullYear(), m: now.getMonth(), sel: '' });
     let events = [];
     try { events = JSON.parse(el.dataset.events); } catch (e) { events = []; }
-    el.innerHTML = calendarHtml(events, st.y, st.m, today);
+    el.innerHTML = calendarHtml(events, st.y, st.m, today, st.sel || '', el.dataset.color);
   });
 }
 
-// ‹ › 버튼을 누르면 이전/다음 달로 이동해요.
+// ‹ › 버튼은 달 이동, 일정이 있는 날짜를 누르면 그 날의 일정 보기 (다시 누르면 닫기). 보기만 가능하고 고칠 수는 없어요.
 function handleCalendarClick(e) {
-  const btn = e.target.closest('.cal-nav');
-  if (!btn) return;
-  const el = btn.closest('.cal');
+  const nav = e.target.closest('.cal-nav');
+  const day = e.target.closest('.cal-day.has');
+  const hit = nav || day;
+  if (!hit) return;
+  const el = hit.closest('.cal');
   const st = window.__calState[el.dataset.id];
-  st.m += Number(btn.dataset.dir);
-  if (st.m < 0) { st.m = 11; st.y -= 1; }
-  if (st.m > 11) { st.m = 0; st.y += 1; }
+  if (nav) {
+    st.m += Number(nav.dataset.dir);
+    if (st.m < 0) { st.m = 11; st.y -= 1; }
+    if (st.m > 11) { st.m = 0; st.y += 1; }
+    st.sel = '';
+  } else {
+    st.sel = st.sel === day.dataset.date ? '' : day.dataset.date;
+  }
   renderCalendars(el.parentNode);
 }
 
@@ -613,12 +661,12 @@ const PAGE_CSS = `
 .links { display: flex; gap: 10px; margin: 0 0 18px; }
 .links-stack { flex-direction: column; }
 .links-row { flex-direction: row; overflow-x: auto; padding: 4px 2px 10px; }
-.link-btn { display: block; box-sizing: border-box; text-decoration: none; text-align: center; padding: 14px; font-weight: bold; font-size: var(--fs-btn); border-radius: 12px; }
+.link-btn { display: block; box-sizing: border-box; text-decoration: none; text-align: center; padding: var(--btn-pad) 14px; font-weight: bold; font-size: var(--fs-btn); border-radius: 12px; }
+.links-stack .link-btn { width: var(--btn-w); margin: 0 auto; }
 .links-row .link-btn { flex: 1 0 auto; min-width: 110px; white-space: nowrap; }
 .ls-card { border-radius: 22px; box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
 .link-btn:hover { filter: brightness(0.94); }
 .blk { margin: 0 0 18px; }
-.blk-label { font-size: var(--fs-sub); opacity: 0.6; margin: 0 0 6px 6px; font-weight: 600; word-break: break-word; }
 .card { border-radius: 22px; padding: 20px; color: #222; font-size: var(--fs-body); }
 .cs-gray { background: #f7f8fa; }
 .cs-white { background: #ffffff; box-shadow: 0 2px 12px rgba(0,0,0,0.1); }
@@ -633,13 +681,19 @@ details.toggle .sec-text { margin-top: 10px; }
 .cal-nav { border: none; background: rgba(0,0,0,0.07); color: inherit; border-radius: 50%; width: 32px; height: 32px; font-size: 18px; line-height: 1; cursor: pointer; padding: 0; margin: 0; }
 .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; text-align: center; }
 .cal-dow { font-size: 12px; opacity: 0.55; padding: 4px 0; }
-.cal-day { padding: 8px 0; border-radius: 10px; font-size: 14px; }
+.cal-day { padding: 6px 0 4px; min-height: 42px; box-sizing: border-box; border-radius: 10px; font-size: 14px; }
 .cal-day.today { outline: 2px solid var(--accent); outline-offset: -2px; }
-.cal-day.has { background: var(--accent); color: var(--accent-text); font-weight: bold; }
-.cal-list { list-style: none; margin: 12px 0 0; padding: 0; font-size: var(--fs-body); line-height: 1.5; }
-.cal-list li { padding: 5px 0; border-top: 1px solid rgba(0,0,0,0.08); word-break: break-word; }
-.cal-list b { margin-right: 8px; }
-.cal-empty { margin: 12px 0 0; opacity: 0.5; font-size: 13px; text-align: center; }
+.cal-day.has { cursor: pointer; }
+.cal-day.has:hover { background: rgba(0,0,0,0.05); }
+.cal-day.sel { background: rgba(0,0,0,0.09); }
+.cal-bars { display: flex; flex-direction: column; gap: 2px; margin: 3px 7px 0; }
+.cal-bars i { display: block; height: 3px; border-radius: 2px; }
+.cal-detail { margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(0,0,0,0.08); }
+.cal-detail-date { font-weight: bold; margin-bottom: 6px; font-size: var(--fs-body); }
+.cal-detail ul { list-style: none; margin: 0; padding: 0; }
+.cal-detail li { display: flex; gap: 8px; padding: 3px 0; font-size: var(--fs-body); line-height: 1.5; word-break: break-word; }
+.cal-detail li i { flex: none; width: 4px; border-radius: 2px; }
+.cal-hint { margin: 10px 0 0; opacity: 0.5; font-size: 12px; text-align: center; }
 .sticker { position: absolute; transform: translateX(-50%); pointer-events: none; user-select: none; }
 `;
 
@@ -809,6 +863,9 @@ function editPage(token, page) {
         <option value="stack">세로로 쌓기</option>
         <option value="row">가로로 나란히 (넘치면 옆으로 스크롤)</option>
       </select>
+      <label>버튼 크기</label>
+      <div id="btnSizes"></div>
+      <p class="hint">너비는 "세로로 쌓기"일 때 적용돼요. 글자 크기는 위의 "글자 크기"에서 조절해요.</p>
       <p class="hint">버튼마다 다른 색을 쓰려면 각 버튼의 "이 버튼만 다른 색"을 켜세요.</p>
       <div id="links"></div>
       <button class="gray" id="addLink">+ 링크 추가</button>
@@ -842,6 +899,7 @@ const token = ${JSON.stringify(token)};
 const data = ${initial};      // 지금 저장되어 있는 내용 (이 안의 값을 고치면서 편집해요)
 const design = data.design;
 const FONT_LIMITS = ${JSON.stringify(FONT_LIMITS)};
+const BTN_LIMITS = ${JSON.stringify(BTN_LIMITS)};
 let dirty = false;            // 저장하지 않은 변경이 있는지
 
 // ----- 공개 페이지를 그리는 함수들 (서버 코드에서 복사됨) -----
@@ -1014,7 +1072,7 @@ $('textColor').onchange = function () { design.textColor = $('textColor').value;
 $('accent').oninput = function () { design.accent = $('accent').value; drawLinks(); changed(); };
 
 // ----- 글자 크기 슬라이더 -----
-[['title', '제목'], ['sub', '제목 아래 설명 / 소제목'], ['body', '카드 안 글'], ['btn', '링크 버튼 글']].forEach(function (k) {
+[['title', '제목'], ['sub', '제목 아래 설명'], ['body', '카드 안 글'], ['btn', '링크 버튼 글']].forEach(function (k) {
   const key = k[0];
   const row = document.createElement('div'); row.className = 'sizeRow';
   const name = document.createElement('span'); name.className = 'name'; name.textContent = k[1];
@@ -1024,6 +1082,19 @@ $('accent').oninput = function () { design.accent = $('accent').value; drawLinks
   range.oninput = function () { design.fonts[key] = Number(range.value); val.textContent = range.value + 'px'; changed(); };
   row.append(name, range, val);
   $('sizes').appendChild(row);
+});
+
+// ----- 링크 버튼 크기 슬라이더 -----
+[['pad', '버튼 높이', 'px'], ['width', '버튼 너비', '%']].forEach(function (k) {
+  const key = k[0];
+  const row = document.createElement('div'); row.className = 'sizeRow';
+  const name = document.createElement('span'); name.className = 'name'; name.textContent = k[1];
+  const range = document.createElement('input'); range.type = 'range'; range.id = 'btn_' + key;
+  range.min = BTN_LIMITS[key][0]; range.max = BTN_LIMITS[key][1]; range.value = design.btn[key];
+  const val = document.createElement('span'); val.className = 'val'; val.textContent = design.btn[key] + k[2];
+  range.oninput = function () { design.btn[key] = Number(range.value); val.textContent = range.value + k[2]; changed(); };
+  row.append(name, range, val);
+  $('btnSizes').appendChild(row);
 });
 
 // ----- 링크 -----
@@ -1072,7 +1143,7 @@ function todayString() {
 function jumpToMonth(index, dateString) {
   if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(dateString)) return;
   window.__calState = window.__calState || {};
-  window.__calState['b' + index] = { y: Number(dateString.slice(0, 4)), m: Number(dateString.slice(5, 7)) - 1 };
+  window.__calState['b' + index] = { y: Number(dateString.slice(0, 4)), m: Number(dateString.slice(5, 7)) - 1, sel: dateString };
 }
 
 function drawEvents(b, index, box) {
@@ -1082,7 +1153,17 @@ function drawEvents(b, index, box) {
     const date = document.createElement('input'); date.type = 'date'; date.value = ev.date;
     date.oninput = function () { ev.date = date.value; jumpToMonth(index, ev.date); changed(); };
     const text = textInput(ev.text, '일정 내용', 100, function (v) { ev.text = v; changed(); });
-    row.append(date, text, button('삭제', 'red', function () { b.events.splice(k, 1); drawEvents(b, index, box); changed(); }));
+    // 이 일정만 다른 색 (체크하면 직접 고르고, 끄면 캘린더 기본 막대 색을 써요)
+    const use = document.createElement('input'); use.type = 'checkbox'; use.checked = !!ev.color;
+    const col = document.createElement('input'); col.type = 'color'; col.value = ev.color || b.color || design.accent; col.disabled = !ev.color;
+    use.onchange = function () {
+      if (use.checked) { ev.color = col.value; col.disabled = false; }
+      else { ev.color = ''; col.disabled = true; col.value = b.color || design.accent; }
+      jumpToMonth(index, ev.date); changed();
+    };
+    col.oninput = function () { ev.color = col.value; changed(); };
+    const colorLabel = document.createElement('label'); colorLabel.append(use, ' 다른 색 ', col);
+    row.append(date, text, colorLabel, button('삭제', 'red', function () { b.events.splice(k, 1); drawEvents(b, index, box); changed(); }));
     box.appendChild(row);
   });
 }
@@ -1102,7 +1183,7 @@ function drawBlocks() {
   design.blocks.forEach(function (b, i) {
     const item = document.createElement('div'); item.className = 'item';
     const tag = document.createElement('div'); tag.className = 'tag'; tag.textContent = BLOCK_NAMES[b.type];
-    item.append(tag, textInput(b.heading, '소제목 (카드 위에 작게 표시돼요, 비워도 돼요)', 30, function (v) { b.heading = v; changed(); }));
+    item.append(tag);
 
     if (b.type === 'text') {
       item.append(textArea(b.text, '내용을 적어 주세요', 1000, function (v) { b.text = v; changed(); }),
@@ -1136,9 +1217,11 @@ function drawBlocks() {
     if (b.type === 'calendar') {
       const events = document.createElement('div');
       drawEvents(b, i, events);
-      item.append(events, button('+ 일정 추가', 'gray', function () {
+      const barColor = document.createElement('input'); barColor.type = 'color'; barColor.value = b.color || design.accent;
+      barColor.oninput = function () { b.color = barColor.value; drawEvents(b, i, events); changed(); };
+      item.append(labelOf('일정 막대 기본 색 ', barColor), events, button('+ 일정 추가', 'gray', function () {
         if (b.events.length >= 50) { setMsg('일정은 캘린더 하나에 50개까지예요.'); return; }
-        b.events.push({ date: todayString(), text: '' });
+        b.events.push({ date: todayString(), text: '', color: '' });
         jumpToMonth(i, todayString());
         drawEvents(b, i, events); changed();
       }));
@@ -1156,11 +1239,11 @@ document.querySelectorAll('[data-add]').forEach(function (btn) {
   btn.onclick = function () {
     if (design.blocks.length >= 12) { setMsg('블록은 최대 12개까지예요.'); return; }
     const type = btn.dataset.add;
-    const b = { type: type, heading: '' };
+    const b = { type: type };
     if (type === 'text') { b.text = ''; b.align = 'left'; }
     if (type === 'toggle') { b.title = ''; b.text = ''; b.align = 'left'; b.open = false; }
     if (type === 'gallery') { b.images = []; b.columns = 2; }
-    if (type === 'calendar') { b.events = []; }
+    if (type === 'calendar') { b.events = []; b.color = design.accent; }
     design.blocks.push(b); drawBlocks(); changed();
   };
 });
