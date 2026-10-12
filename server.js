@@ -676,8 +676,9 @@ const PAGE_CSS = `
 .links-row { flex-direction: row; overflow-x: auto; padding: 4px 2px 10px; }
 .link-btn { display: block; box-sizing: border-box; text-decoration: none; text-align: center; padding: var(--btn-pad) 14px; font-weight: bold; font-size: var(--fs-btn); border-radius: 12px; }
 .links-stack .link-btn { width: var(--btn-w); margin: 0 auto; }
-.links-row .link-btn { flex: 0 0 auto; min-width: max(48px, calc(var(--btn-w) * 1.1px)); white-space: nowrap; }
-.links-row.links-grow .link-btn { flex: 1 0 auto; }
+/* 가로 배열: 너비 슬라이더 = 버튼 한 개가 차지하는 줄 너비의 % (100%는 줄을 가득 채워 나눠 가져요) */
+.links-row .link-btn { flex: 0 0 var(--btn-w); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.links-row.links-grow .link-btn { flex: 1 0 auto; min-width: 110px; overflow: visible; }
 .ls-card { border-radius: 22px; box-shadow: 0 2px 8px rgba(0,0,0,0.12); }
 .link-btn:hover { filter: brightness(0.94); }
 .blk { margin: 0 0 18px; }
@@ -879,7 +880,7 @@ function editPage(token, page) {
       </select>
       <label>버튼 크기</label>
       <div id="btnSizes"></div>
-      <p class="hint">작게 만들려면 높이와 너비를 줄이고, 글자 크기는 위의 "글자 크기"에서 줄여요. "가로로 나란히"일 때는 너비가 버튼의 최소 너비로 쓰여요.</p>
+      <p class="hint">작게 만들려면 높이와 너비를 줄이고, 글자 크기는 위의 "글자 크기"에서 줄여요. "가로로 나란히"일 때는 줄 너비의 몇 %를 버튼 하나가 차지할지가 돼요. (예: 50%면 두 개가 보이고 나머지는 옆으로 스크롤)</p>
       <p class="hint">버튼마다 다른 색을 쓰려면 각 버튼의 "이 버튼만 다른 색"을 켜세요.</p>
       <div id="links"></div>
       <button class="gray" id="addLink">+ 링크 추가</button>
