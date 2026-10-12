@@ -23,6 +23,7 @@ const MAX_UPLOAD_BYTES = 2 * 1024 * 1024;            // 사진 한 장 최대 2M
 const MAX_CREATES_PER_DAY = 5;                       // 한 사람이 하루에 만들 수 있는 페이지 수
 const MAX_UPLOADS_PER_PAGE_PER_DAY = 100;            // 페이지 하나당 하루 사진 업로드 수
 const RESERVED = ['edit', 'api', 'create', 'admin', 'static', 'favicon.ico'];
+const SITE_NAME = (process.env.SITE_NAME || 'SNOWBALL').slice(0, 30);  // 첫 화면에 보이는 서비스 이름 (Render 환경변수 SITE_NAME 으로 바꿀 수 있어요)
 
 if (!SUPABASE_URL || !SUPABASE_KEY) {
   console.error('❌ SUPABASE_URL 과 SUPABASE_KEY 환경변수를 설정해 주세요. (README.md 참고)');
@@ -416,8 +417,9 @@ function validateDesign(input, slug) {
 // 화면(HTML) 만들기
 // ------------------------------------------------------------
 
-// 모든 페이지에 공통으로 들어가는 껍데기 (꾸밈 CSS 포함)
-function layout(title, body) {
+// 첫 화면, "만들기 완료" 화면, 오류 화면이 함께 쓰는 껍데기 (미니멀 디자인)
+// script 를 넘기면 페이지 맨 아래에 넣어줘요.
+function layout(title, body, script) {
   return `<!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -425,41 +427,76 @@ function layout(title, body) {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>${escapeHtml(title)}</title>
   <style>
-    body { font-family: sans-serif; background: #f3f0ff; margin: 0; padding: 40px 16px; }
-    .card { max-width: 440px; margin: 0 auto; background: white; border-radius: 20px;
-            padding: 32px 24px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
-    h1 { margin-top: 0; font-size: 24px; text-align: center; }
-    p.bio { text-align: center; color: #666; }
-    a.link-btn { display: block; background: #6c5ce7; color: white; text-decoration: none;
-                 text-align: center; padding: 14px; border-radius: 12px; margin: 12px 0; font-weight: bold; }
-    a.link-btn:hover { background: #5847d6; }
-    input, textarea { width: 100%; box-sizing: border-box; padding: 10px; margin: 6px 0;
-                      border: 1px solid #ccc; border-radius: 8px; font-size: 15px; }
-    button { background: #6c5ce7; color: white; border: none; padding: 12px 18px;
-             border-radius: 10px; font-size: 15px; cursor: pointer; margin: 6px 4px 6px 0; }
-    button.gray { background: #b2bec3; }
-    button.red { background: #d63031; padding: 8px 12px; }
-    .link-row { background: #f8f8f8; padding: 10px; border-radius: 10px; margin: 10px 0; }
-    .box { background: #ffeaa7; padding: 14px; border-radius: 10px; word-break: break-all; }
-    .small { color: #888; font-size: 13px; }
+    :root { --ink: #111111; --sub: #6b7280; --line: #e5e7eb; --bg: #fafafa; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--ink); line-height: 1.6; -webkit-font-smoothing: antialiased;
+           font-family: -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', sans-serif; }
+    a { color: inherit; }
+    .wrap { max-width: 480px; margin: 0 auto; padding: 28px 20px 56px; }
+    .brand { font-weight: 800; font-size: 14px; letter-spacing: 0.1em; }
+    .brand a { text-decoration: none; }
+    .hero { padding: 52px 0 8px; }
+    h1 { font-size: 34px; line-height: 1.25; margin: 0 0 14px; letter-spacing: -0.02em; word-break: keep-all; }
+    .lead, p.bio { color: var(--sub); margin: 0; word-break: keep-all; }
+    form { margin-top: 28px; }
+    .field { display: flex; align-items: center; background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 0 14px; transition: border-color 0.15s; }
+    .field:focus-within { border-color: var(--ink); }
+    .field .host { color: #374151; font-size: 15px; white-space: nowrap; max-width: 55%; overflow: hidden; text-overflow: ellipsis; }
+    .field input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; padding: 15px 0 15px 2px; font-size: 16px; font-family: inherit; color: var(--ink); }
+    .rule { color: var(--sub); font-size: 13px; margin: 8px 2px 0; }
+    .error { color: #b91c1c; font-size: 14px; margin: 12px 2px 0; }
+    .btn { display: block; width: 100%; margin-top: 14px; padding: 15px; border: 0; border-radius: 12px; background: var(--ink); color: #fff;
+           font-size: 16px; font-weight: 600; font-family: inherit; text-align: center; text-decoration: none; cursor: pointer; }
+    .btn:hover { background: #333333; }
+    .steps { list-style: none; margin: 48px 0 0; padding: 0; border-top: 1px solid var(--line); }
+    .steps li { display: flex; gap: 16px; padding: 20px 0; border-bottom: 1px solid var(--line); }
+    .steps .num { flex: none; width: 28px; height: 28px; border: 1px solid var(--ink); border-radius: 50%; font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+    .steps b { display: block; }
+    .steps .d { color: var(--sub); font-size: 14px; word-break: keep-all; }
+    .foot { margin-top: 28px; color: #9ca3af; font-size: 12px; }
+    .check { width: 44px; height: 44px; border-radius: 50%; background: var(--ink); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 22px; margin-bottom: 18px; }
+    .addr { margin-top: 28px; }
+    .addr .label { font-size: 13px; font-weight: 700; margin-bottom: 8px; }
+    .addr-row { display: flex; align-items: center; gap: 8px; background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 6px 6px 6px 14px; }
+    .addr-row a { flex: 1; min-width: 0; font-size: 14px; word-break: break-all; text-decoration: none; }
+    .copy { flex: none; border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: 8px; padding: 8px 12px; font-size: 13px; font-family: inherit; cursor: pointer; }
+    .copy:hover { border-color: var(--ink); }
+    .warn { margin-top: 24px; padding: 14px 16px; border: 1px solid #fecaca; background: #fef2f2; color: #991b1b; border-radius: 12px; font-size: 14px; word-break: keep-all; }
   </style>
 </head>
-<body><div class="card">${body}</div></body>
+<body>
+  <div class="wrap">
+    <div class="brand"><a href="/">${escapeHtml(SITE_NAME)}</a></div>
+    ${body}
+  </div>
+  ${script ? '<script>' + script + '</script>' : ''}
+</body>
 </html>`;
 }
 
-// 첫 화면: 페이지 만들기
+// 첫 화면: 서비스 소개 + 페이지 만들기 + 사용 방법 3단계
 function homePage(error) {
-  return layout('내 링크 페이지 만들기', `
-    <h1>🔗 내 링크 페이지 만들기</h1>
-    <p class="bio">가입 없이 1분 만에 만들 수 있어요.</p>
-    ${error ? `<p style="color:#d63031">${escapeHtml(error)}</p>` : ''}
+  return layout(SITE_NAME + ' · 내 링크 페이지 만들기', `
+    <section class="hero">
+      <h1>나만의 링크 페이지를<br>가입 없이 1분 만에</h1>
+      <p class="lead">프로필, 링크, 일정, 사진을 한 페이지에 모아서 하나의 주소로 공유해 보세요.</p>
+    </section>
     <form method="POST" action="/create">
-      <label>원하는 주소 (영어 소문자, 숫자, -, _ / 3~20자)</label>
-      <input name="slug" placeholder="예: mypage" required>
-      <button type="submit">페이지 만들기</button>
+      <div class="field">
+        <span class="host" id="host">/</span>
+        <input name="slug" placeholder="내주소" required autocomplete="off" autocapitalize="off" spellcheck="false">
+      </div>
+      <p class="rule">영어 소문자, 숫자, -, _ 로 3~20자</p>
+      ${error ? `<p class="error">${escapeHtml(error)}</p>` : ''}
+      <button class="btn" type="submit">페이지 만들기</button>
     </form>
-  `);
+    <ol class="steps">
+      <li><span class="num">1</span><div><b>주소를 정해요</b><span class="d">원하는 주소를 입력하고 페이지를 만들어요.</span></div></li>
+      <li><span class="num">2</span><div><b>수정 주소를 저장해요</b><span class="d">나만 고칠 수 있는 비밀 주소가 한 번만 나와요. 꼭 복사해 두세요.</span></div></li>
+      <li><span class="num">3</span><div><b>꾸미고 공유해요</b><span class="d">링크, 사진, 일정을 채우고 공개 주소를 프로필에 붙여넣어요.</span></div></li>
+    </ol>
+    <p class="foot">가입도 설치도 필요 없어요.</p>
+  `, "document.getElementById('host').textContent = location.host + '/';");
 }
 
 // ------------------------------------------------------------
@@ -731,14 +768,31 @@ function publicPage(page) {
 // 만들기 성공 후: 수정 주소를 딱 한 번 보여주는 화면
 function createdPage(slug, editUrl, publicUrl) {
   return layout('만들기 완료', `
-    <h1>🎉 페이지가 만들어졌어요!</h1>
-    <p><b>공개 주소</b> (인스타 프로필 등에 붙여넣기)</p>
-    <div class="box"><a href="${escapeHtml(publicUrl)}">${escapeHtml(publicUrl)}</a></div>
-    <p><b>수정 주소</b> (나만 알아야 해요!)</p>
-    <div class="box"><a href="${escapeHtml(editUrl)}">${escapeHtml(editUrl)}</a></div>
-    <p style="color:#d63031"><b>⚠️ 수정 주소는 지금만 보여드려요. 꼭 복사해서 저장해 두세요!</b><br>
-    잃어버리면 다시 수정할 수 없어요.</p>
-    <a href="${escapeHtml(editUrl)}"><button>바로 수정하러 가기</button></a>
+    <section class="hero">
+      <div class="check">✓</div>
+      <h1>페이지가 만들어졌어요</h1>
+      <p class="lead">아래 두 주소를 확인해 주세요.</p>
+    </section>
+    <div class="addr">
+      <div class="label">공개 주소</div>
+      <div class="addr-row"><a href="${escapeHtml(publicUrl)}">${escapeHtml(publicUrl)}</a><button type="button" class="copy" data-copy="${escapeHtml(publicUrl)}">복사</button></div>
+      <p class="rule">인스타 프로필 등에 붙여넣어 공유하세요.</p>
+    </div>
+    <div class="addr">
+      <div class="label">수정 주소 (나만 알아야 해요)</div>
+      <div class="addr-row"><a href="${escapeHtml(editUrl)}">${escapeHtml(editUrl)}</a><button type="button" class="copy" data-copy="${escapeHtml(editUrl)}">복사</button></div>
+    </div>
+    <div class="warn"><b>수정 주소는 지금만 보여드려요.</b> 꼭 복사해서 저장해 두세요. 잃어버리면 다시 수정할 수 없어요.</div>
+    <a class="btn" href="${escapeHtml(editUrl)}">바로 수정하러 가기</a>
+  `, `
+    document.querySelectorAll('.copy').forEach(function (b) {
+      b.onclick = function () {
+        var text = b.dataset.copy;
+        function done() { var old = b.textContent; b.textContent = '복사됨'; setTimeout(function () { b.textContent = old; }, 1500); }
+        function fallback() { window.prompt('복사해서 저장하세요', text); }
+        if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(text).then(done, fallback); } else { fallback(); }
+      };
+    });
   `);
 }
 
@@ -1426,7 +1480,7 @@ const server = http.createServer(async function (req, res) {
     // (다) 수정 화면 보기:  GET /edit/토큰
     if (req.method === 'GET' && parts[0] === 'edit' && parts.length === 2) {
       const page = isValidToken(parts[1]) ? await getPageByToken(parts[1]) : null;
-      if (!page) return sendHtml(res, 404, layout('없음', '<h1>잘못된 수정 주소예요.</h1>'));
+      if (!page) return sendHtml(res, 404, layout('없음', '<section class="hero"><h1>잘못된 수정 주소예요</h1><p class="lead">주소를 다시 확인해 주세요.</p></section>'));
       return sendHtml(res, 200, editPage(parts[1], page));
     }
 
@@ -1515,7 +1569,7 @@ const server = http.createServer(async function (req, res) {
       if (page) return sendHtml(res, 200, publicPage(page));
     }
 
-    return sendHtml(res, 404, layout('없음', '<h1>페이지를 찾을 수 없어요.</h1><p class="bio"><a href="/">처음으로</a></p>'));
+    return sendHtml(res, 404, layout('없음', '<section class="hero"><h1>페이지를 찾을 수 없어요</h1><p class="lead">주소가 틀렸거나 없어진 페이지예요.</p></section><a class="btn" href="/">처음으로</a>'));
 
   } catch (err) {
     console.error(err);
